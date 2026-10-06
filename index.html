@@ -4,43 +4,45 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
   <meta name="theme-color" content="#07110c" />
-  <title>ArUco ID 0 即時辨識 + XYZ</title>
+  <title>ArUco ID 0 抗背光即時辨識 + XYZ</title>
   <style>
-    :root { color-scheme: dark; --panel: rgba(4,14,9,.84); --line:#1d3929; --accent:#59ff8a; }
+    :root { color-scheme: dark; --panel: rgba(4,14,9,.90); --line:#1d3929; --accent:#59ff8a; }
     * { box-sizing: border-box; }
-    html,body { margin:0; min-height:100%; background:#030806; color:#eef7f1; font-family: system-ui,-apple-system,"Noto Sans TC",sans-serif; }
+    html,body { margin:0; min-height:100%; background:#030806; color:#eef7f1; font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif; }
     body { min-height:100dvh; display:flex; flex-direction:column; }
-    header { padding:12px 14px; display:flex; gap:10px; justify-content:space-between; align-items:center; background:#07110c; border-bottom:1px solid var(--line); }
-    header strong { font-size:15px; letter-spacing:.02em; }
-    #status { font-size:12px; color:#b8c9bd; white-space:nowrap; }
+    header { padding:10px 12px; display:flex; gap:8px; justify-content:space-between; align-items:center; background:#07110c; border-bottom:1px solid var(--line); }
+    header strong { font-size:14px; letter-spacing:.02em; }
+    #status { font-size:11px; color:#b8c9bd; white-space:nowrap; }
     main { flex:1; min-height:0; position:relative; display:grid; place-items:center; background:#000; overflow:hidden; }
     video { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
-    canvas { display:block; max-width:100%; max-height:100%; width:auto; height:auto; background:#000; }
-    .hud { position:absolute; left:12px; top:12px; min-width:190px; max-width:calc(100% - 24px); padding:10px 12px; border:1px solid rgba(89,255,138,.3); border-radius:12px; background:rgba(0,10,5,.66); backdrop-filter:blur(8px); font:600 12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; pointer-events:none; }
-    .hud .ok { color:#59ff8a; } .hud .muted { color:#9aafa1; }
-    footer { padding:10px 12px calc(10px + env(safe-area-inset-bottom)); display:grid; gap:8px; background:var(--panel); border-top:1px solid var(--line); }
-    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    button,input,select { min-height:42px; border-radius:10px; border:1px solid #31513d; background:#102018; color:#eff8f1; font-size:14px; }
-    button { padding:0 14px; font-weight:700; cursor:pointer; }
+    canvas#canvas { display:block; max-width:100%; max-height:100%; width:auto; height:auto; background:#000; }
+    canvas#detectCanvas { display:none; }
+    .hud { position:absolute; left:10px; top:10px; min-width:205px; max-width:calc(100% - 20px); padding:9px 11px; border:1px solid rgba(89,255,138,.35); border-radius:11px; background:rgba(0,10,5,.70); backdrop-filter:blur(8px); font:600 11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; pointer-events:none; }
+    .hud .ok { color:#59ff8a; } .hud .muted { color:#9aafa1; } .hud .warn { color:#ffd36b; }
+    footer { padding:8px 10px calc(8px + env(safe-area-inset-bottom)); display:grid; gap:7px; background:var(--panel); border-top:1px solid var(--line); }
+    .row { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+    button,input,select { min-height:40px; border-radius:9px; border:1px solid #31513d; background:#102018; color:#eff8f1; font-size:13px; }
+    button { padding:0 12px; font-weight:700; cursor:pointer; }
     button.primary { background:#163b24; border-color:#49bd6c; }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    label { display:flex; align-items:center; gap:6px; color:#bfd0c3; font-size:12px; }
-    input { width:88px; padding:0 9px; }
-    .note { font-size:11px; color:#8fa296; line-height:1.45; }
+    button:disabled,input:disabled { opacity:.45; cursor:not-allowed; }
+    label { display:flex; align-items:center; gap:6px; color:#bfd0c3; font-size:11px; }
+    input[type="number"] { width:82px; padding:0 8px; }
+    input[type="range"] { width:150px; min-height:30px; accent-color:#59ff8a; }
+    .value { min-width:48px; color:#eef7f1; font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .note { font-size:10.5px; color:#8fa296; line-height:1.4; }
   </style>
 </head>
 <body>
   <header>
-    <strong>ArUco ID 0 · 即時 XYZ</strong>
+    <strong>ArUco ID 0 · 抗背光 XYZ</strong>
     <span id="status">等待啟動</span>
   </header>
 
   <main id="stage">
     <video id="video" playsinline muted></video>
     <canvas id="canvas"></canvas>
-    <div class="hud" id="hud">
-      <div class="muted">尚未偵測到 ArUco ID 0</div>
-    </div>
+    <canvas id="detectCanvas"></canvas>
+    <div class="hud" id="hud"><div class="muted">尚未偵測到 ArUco ID 0</div></div>
   </main>
 
   <footer>
@@ -51,7 +53,19 @@
         <input id="markerSize" type="number" min="5" max="1000" step="1" value="80" />
       </label>
     </div>
-    <div class="note">X=紅、Y=綠、Z=藍。XYZ 數值是相對相機的平移估算；未做相機內參校正時屬近似值。手機瀏覽器需 HTTPS（或 localhost）才能開啟相機。</div>
+    <div class="row">
+      <label>曝光補償
+        <input id="exposure" type="range" min="-3" max="3" step="0.1" value="0" disabled />
+        <span class="value" id="exposureValue">不支援</span>
+      </label>
+      <button id="autoExposureBtn" disabled>曝光歸零</button>
+    </div>
+    <div class="row">
+      <label><input id="enhanceToggle" type="checkbox" checked /> 抗背光增強</label>
+      <label><input id="holdToggle" type="checkbox" checked /> 遺失保持 250ms</label>
+      <label><input id="smoothToggle" type="checkbox" checked /> XYZ 平滑</label>
+    </div>
+    <div class="note">建議背光時先把「曝光補償」往負值調（例如 -1 ～ -2 EV）。程式會先用原始影像辨識，失敗時再用灰階＋降亮度＋高對比影像重試。X=紅、Y=綠、Z=藍。XYZ 未做相機內參校正時仍屬近似值。</div>
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
@@ -64,14 +78,26 @@
   (() => {
     'use strict';
     const TARGET_ID = 0;
+    const HOLD_MS = 250;
+    const PROCESS_INTERVAL_MS = 45; // 約 22 fps 上限，1080p 手機較不易過熱
+    const SMOOTH_ALPHA = 0.25;
+
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const detectCanvas = document.getElementById('detectCanvas');
+    const dctx = detectCanvas.getContext('2d', { willReadFrequently: true });
     const hud = document.getElementById('hud');
     const status = document.getElementById('status');
     const startBtn = document.getElementById('startBtn');
     const switchBtn = document.getElementById('switchBtn');
     const markerSizeInput = document.getElementById('markerSize');
+    const exposure = document.getElementById('exposure');
+    const exposureValue = document.getElementById('exposureValue');
+    const autoExposureBtn = document.getElementById('autoExposureBtn');
+    const enhanceToggle = document.getElementById('enhanceToggle');
+    const holdToggle = document.getElementById('holdToggle');
+    const smoothToggle = document.getElementById('smoothToggle');
 
     let stream = null;
     let facingMode = 'environment';
@@ -79,48 +105,109 @@
     let running = false;
     let lastFrameTs = 0;
     let fpsEMA = 0;
+    let currentTrack = null;
     let currentTrackSettings = {};
     let loopGeneration = 0;
+    let lastGood = null;
+    let smoothT = null;
+    let lastDetectMode = 'raw';
 
     function setStatus(text) { status.textContent = text; }
 
     function pickDictionaryName() {
       const keys = Object.keys((window.AR && AR.DICTIONARIES) || {});
-      return keys.find(k => /4X4.*1000/i.test(k)) ||
-             keys.find(k => /4X4/i.test(k)) ||
-             'ARUCO_4X4_1000';
+      return keys.find(k => /4X4.*1000/i.test(k)) || keys.find(k => /4X4/i.test(k)) || 'ARUCO_4X4_1000';
     }
 
     function initDetector() {
       if (!window.AR || !AR.Detector) throw new Error('ArUco 函式庫載入失敗');
       const dictionaryName = pickDictionaryName();
       detector = new AR.Detector({ dictionaryName, maxHammingDistance: 1 });
-      console.log('ArUco dictionary:', dictionaryName, Object.keys(AR.DICTIONARIES || {}));
+      console.log('ArUco dictionary:', dictionaryName);
     }
 
     async function openCamera() {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('此瀏覽器不支援相機 API');
       stopCamera();
+      lastGood = null;
+      smoothT = null;
+      lastFrameTs = 0;
+
       const constraints = {
         audio: false,
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30, max: 30 }
         }
       };
+
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
       await video.play();
-      const track = stream.getVideoTracks()[0];
-      currentTrackSettings = track.getSettings ? track.getSettings() : {};
+      currentTrack = stream.getVideoTracks()[0];
+      currentTrackSettings = currentTrack.getSettings ? currentTrack.getSettings() : {};
+      await tuneCamera(currentTrack);
       resizeCanvasToVideo();
+      setupExposureControls(currentTrack);
+
       running = true;
       const generation = ++loopGeneration;
       switchBtn.disabled = false;
       startBtn.textContent = '重新啟動相機';
-      setStatus(facingMode === 'environment' ? '後鏡頭辨識中' : '前鏡頭辨識中');
+      setStatus(`${facingMode === 'environment' ? '後鏡頭' : '前鏡頭'} ${canvas.width}×${canvas.height}`);
       requestAnimationFrame(ts => loop(ts, generation));
+    }
+
+    async function tuneCamera(track) {
+      if (!track?.getCapabilities || !track.applyConstraints) return;
+      try {
+        const caps = track.getCapabilities();
+        const adv = {};
+        if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+        if (Array.isArray(caps.whiteBalanceMode) && caps.whiteBalanceMode.includes('continuous')) adv.whiteBalanceMode = 'continuous';
+        if (Object.keys(adv).length) await track.applyConstraints({ advanced: [adv] });
+      } catch (e) {
+        console.warn('相機自動調整不支援：', e);
+      }
+    }
+
+    function setupExposureControls(track) {
+      exposure.disabled = true;
+      autoExposureBtn.disabled = true;
+      exposureValue.textContent = '不支援';
+      if (!track?.getCapabilities || !track.applyConstraints) return;
+
+      try {
+        const caps = track.getCapabilities();
+        const settings = track.getSettings ? track.getSettings() : {};
+        const c = caps.exposureCompensation;
+        if (c && Number.isFinite(c.min) && Number.isFinite(c.max)) {
+          exposure.min = c.min;
+          exposure.max = c.max;
+          exposure.step = Number.isFinite(c.step) && c.step > 0 ? c.step : 0.1;
+          const current = Number.isFinite(settings.exposureCompensation) ? settings.exposureCompensation : 0;
+          exposure.value = Math.max(c.min, Math.min(c.max, current));
+          exposure.disabled = false;
+          autoExposureBtn.disabled = false;
+          exposureValue.textContent = `${Number(exposure.value).toFixed(1)} EV`;
+        }
+      } catch (e) {
+        console.warn('無法讀取曝光能力：', e);
+      }
+    }
+
+    async function applyExposure(value) {
+      if (!currentTrack?.applyConstraints || exposure.disabled) return;
+      const v = Number(value);
+      exposureValue.textContent = `${v.toFixed(1)} EV`;
+      try {
+        await currentTrack.applyConstraints({ advanced: [{ exposureCompensation: v }] });
+      } catch (e) {
+        console.warn('曝光補償設定失敗：', e);
+        setStatus('此鏡頭不接受曝光補償');
+      }
     }
 
     function stopCamera() {
@@ -128,25 +215,55 @@
       loopGeneration++;
       if (stream) stream.getTracks().forEach(t => t.stop());
       stream = null;
+      currentTrack = null;
       video.srcObject = null;
+      exposure.disabled = true;
+      autoExposureBtn.disabled = true;
     }
 
     function resizeCanvasToVideo() {
-      const vw = video.videoWidth || 1280;
-      const vh = video.videoHeight || 720;
-      // 限制處理解析度，兼顧手機效能
-      const maxW = 960;
+      const vw = video.videoWidth || currentTrackSettings.width || 1920;
+      const vh = video.videoHeight || currentTrackSettings.height || 1080;
+      // 優先保留高解析度，最多 1920px 寬；小型遠距 Marker 比 640/960px 穩定很多。
+      const maxW = 1920;
       const scale = Math.min(1, maxW / vw);
-      canvas.width = Math.round(vw * scale);
-      canvas.height = Math.round(vh * scale);
+      canvas.width = Math.max(1, Math.round(vw * scale));
+      canvas.height = Math.max(1, Math.round(vh * scale));
+      detectCanvas.width = canvas.width;
+      detectCanvas.height = canvas.height;
     }
 
-    function drawPolyline(corners) {
+    function findTarget(markers) {
+      return (markers || []).find(m => Number(m.id) === TARGET_ID) || null;
+    }
+
+    function detectRaw() {
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const marker = findTarget(detector.detect(imageData) || []);
+      if (marker) lastDetectMode = '原始';
+      return marker;
+    }
+
+    function detectEnhanced() {
+      // 第二次辨識使用灰階、略降亮度與高對比，對窗戶/燈具附近的低對比黑邊特別有幫助。
+      dctx.save();
+      dctx.clearRect(0, 0, detectCanvas.width, detectCanvas.height);
+      dctx.filter = 'grayscale(1) brightness(0.72) contrast(2.15)';
+      dctx.drawImage(video, 0, 0, detectCanvas.width, detectCanvas.height);
+      dctx.restore();
+      const imageData = dctx.getImageData(0, 0, detectCanvas.width, detectCanvas.height);
+      const marker = findTarget(detector.detect(imageData) || []);
+      if (marker) lastDetectMode = '抗背光';
+      return marker;
+    }
+
+    function drawPolyline(corners, held=false) {
       ctx.save();
-      ctx.strokeStyle = '#39ff75';
-      ctx.lineWidth = Math.max(3, canvas.width / 320);
+      ctx.strokeStyle = held ? 'rgba(57,255,117,.62)' : '#39ff75';
+      ctx.lineWidth = Math.max(3, canvas.width / 400);
       ctx.shadowColor = '#00ff55';
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = held ? 3 : 8;
+      ctx.setLineDash(held ? [12,8] : []);
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i=1; i<corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
@@ -167,54 +284,80 @@
       return { x: canvas.width/2 + f * X/Z, y: canvas.height/2 - f * Y/Z };
     }
 
-    function drawAxisLine(origin, point, color, label) {
+    function drawAxisLine(origin, point, color, label, held=false) {
       if (!origin || !point) return;
       ctx.save();
+      ctx.globalAlpha = held ? 0.62 : 1;
       ctx.lineCap = 'round';
-      ctx.lineWidth = Math.max(3, canvas.width / 360);
+      ctx.lineWidth = Math.max(3, canvas.width / 450);
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.beginPath(); ctx.moveTo(origin.x, origin.y); ctx.lineTo(point.x, point.y); ctx.stroke();
       const a = Math.atan2(point.y-origin.y, point.x-origin.x);
-      const ah = 9;
+      const ah = Math.max(9, canvas.width/180);
       ctx.beginPath();
       ctx.moveTo(point.x, point.y);
       ctx.lineTo(point.x-ah*Math.cos(a-0.55), point.y-ah*Math.sin(a-0.55));
       ctx.lineTo(point.x-ah*Math.cos(a+0.55), point.y-ah*Math.sin(a+0.55));
       ctx.closePath(); ctx.fill();
-      ctx.font = `700 ${Math.max(14, canvas.width/55)}px system-ui`;
+      ctx.font = `700 ${Math.max(14, canvas.width/72)}px system-ui`;
       ctx.fillText(label, point.x + 7, point.y - 7);
       ctx.restore();
     }
 
-    function drawPose(corners, markerSize) {
+    function smoothTranslation(T) {
+      if (!smoothToggle.checked) { smoothT = T.slice(); return T.slice(); }
+      if (!smoothT) smoothT = T.slice();
+      else for (let i=0; i<3; i++) smoothT[i] = smoothT[i]*(1-SMOOTH_ALPHA) + T[i]*SMOOTH_ALPHA;
+      return smoothT.slice();
+    }
+
+    function estimatePose(corners, markerSize) {
       if (!window.POS?.Posit) return null;
       const posit = new POS.Posit(markerSize, canvas.width);
       const pose = posit.pose(centerCorners(corners));
       if (!pose || !pose.bestRotation || !pose.bestTranslation) return null;
-      const R = pose.bestRotation;
-      const T = pose.bestTranslation;
+      return {
+        rotation: pose.bestRotation,
+        translationRaw: pose.bestTranslation.slice(),
+        translation: smoothTranslation(pose.bestTranslation),
+        error: pose.bestError
+      };
+    }
+
+    function drawPose(pose, markerSize, held=false) {
+      if (!pose) return;
+      const R = pose.rotation;
+      const T = pose.translation;
       const f = canvas.width;
       const L = markerSize * 0.65;
       const O = projectPoint([0,0,0], R,T,f);
       const X = projectPoint([L,0,0], R,T,f);
       const Y = projectPoint([0,L,0], R,T,f);
-      // 使用 -Z 讓藍色 Z 軸朝標記正面方向呈現
       const Z = projectPoint([0,0,-L], R,T,f);
-      drawAxisLine(O, X, '#ff4d4d', 'X');
-      drawAxisLine(O, Y, '#44ff77', 'Y');
-      drawAxisLine(O, Z, '#4da3ff', 'Z');
-      return { translation:T, error:pose.bestError };
+      drawAxisLine(O, X, '#ff4d4d', 'X', held);
+      drawAxisLine(O, Y, '#44ff77', 'Y', held);
+      drawAxisLine(O, Z, '#4da3ff', 'Z', held);
     }
 
-    function drawTagLabel(corners) {
+    function markerPixelSize(corners) {
+      let sum = 0;
+      for (let i=0; i<4; i++) {
+        const a = corners[i], b = corners[(i+1)%4];
+        sum += Math.hypot(b.x-a.x, b.y-a.y);
+      }
+      return sum/4;
+    }
+
+    function drawTagLabel(corners, held=false) {
       const x = Math.min(...corners.map(c=>c.x));
       const y = Math.min(...corners.map(c=>c.y));
       ctx.save();
-      ctx.font = `700 ${Math.max(14, canvas.width/60)}px system-ui`;
-      const text = 'ArUco ID 0';
+      ctx.globalAlpha = held ? .68 : 1;
+      ctx.font = `700 ${Math.max(14, canvas.width/78)}px system-ui`;
+      const text = held ? 'ArUco ID 0 · HOLD' : 'ArUco ID 0';
       const w = ctx.measureText(text).width + 16;
-      const h = Math.max(24, canvas.width/34);
+      const h = Math.max(24, canvas.width/43);
       ctx.fillStyle = 'rgba(0,0,0,.72)';
       ctx.fillRect(x, Math.max(0,y-h), w, h);
       ctx.fillStyle = '#55ff84';
@@ -222,56 +365,79 @@
       ctx.restore();
     }
 
-    function updateHud(pose, fps) {
+    function updateHud(pose, fps, px, held=false) {
       if (!pose) {
         hud.innerHTML = `<div class="muted">尚未偵測到 ArUco ID ${TARGET_ID}</div><div class="muted">FPS ${fps.toFixed(1)}</div>`;
         return;
       }
       const [x,y,z] = pose.translation;
       const dist = Math.hypot(x,y,z);
+      const smallWarn = px < 38 ? `<div class="warn">⚠ Marker 僅約 ${px.toFixed(0)} px，建議靠近或放大</div>` : '';
       hud.innerHTML = `
-        <div class="ok">● ArUco ID ${TARGET_ID} 已鎖定</div>
+        <div class="${held ? 'warn' : 'ok'}">● ArUco ID ${TARGET_ID} ${held ? '短暫保持' : '已鎖定'}</div>
         <div>X <span style="color:#ff7777">${x.toFixed(1)} mm</span></div>
         <div>Y <span style="color:#71ff96">${y.toFixed(1)} mm</span></div>
         <div>Z <span style="color:#73b7ff">${z.toFixed(1)} mm</span></div>
         <div>距離 ${dist.toFixed(1)} mm</div>
-        <div class="muted">Pose error ${Number(pose.error||0).toFixed(2)} · FPS ${fps.toFixed(1)}</div>`;
+        <div class="muted">${lastDetectMode} · ${px.toFixed(0)} px · FPS ${fps.toFixed(1)}</div>
+        ${smallWarn}`;
+    }
+
+    function renderMarker(marker, pose, px, held=false) {
+      drawPolyline(marker.corners, held);
+      drawTagLabel(marker.corners, held);
+      drawPose(pose, Math.max(1, Number(markerSizeInput.value) || 80), held);
+      updateHud(pose, fpsEMA, px, held);
     }
 
     function loop(ts, generation) {
       if (!running || !stream || generation !== loopGeneration) return;
       requestAnimationFrame(nextTs => loop(nextTs, generation));
       if (video.readyState < 2) return;
-      if (video.videoWidth && (canvas.width === 0 || canvas.height === 0)) resizeCanvasToVideo();
-      // 約 30fps 上限，降低手機發熱
-      if (ts - lastFrameTs < 30) return;
-      const dt = ts - lastFrameTs;
+      if (ts - lastFrameTs < PROCESS_INTERVAL_MS) return;
+
+      const dt = lastFrameTs ? ts - lastFrameTs : PROCESS_INTERVAL_MS;
       lastFrameTs = ts;
       const fpsNow = dt > 0 ? 1000/dt : 0;
-      fpsEMA = fpsEMA ? fpsEMA*0.88 + fpsNow*0.12 : fpsNow;
+      fpsEMA = fpsEMA ? fpsEMA*0.86 + fpsNow*0.14 : fpsNow;
 
+      // 顯示畫面永遠保持原始相機影像，不把增強影像顯示給使用者。
+      ctx.filter = 'none';
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      let markers = [];
+
+      let marker = null;
       try {
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        markers = detector.detect(imageData) || [];
+        marker = detectRaw();
+        if (!marker && enhanceToggle.checked) marker = detectEnhanced();
       } catch (err) {
         console.error(err);
         setStatus('辨識錯誤');
         return;
       }
 
-      const marker = markers.find(m => Number(m.id) === TARGET_ID);
-      if (!marker) {
-        updateHud(null, fpsEMA);
+      if (marker) {
+        const markerSize = Math.max(1, Number(markerSizeInput.value) || 80);
+        const pose = estimatePose(marker.corners, markerSize);
+        const px = markerPixelSize(marker.corners);
+        if (pose) {
+          lastGood = { marker, pose, px, time: ts };
+          renderMarker(marker, pose, px, false);
+        } else {
+          drawPolyline(marker.corners);
+          drawTagLabel(marker.corners);
+          updateHud(null, fpsEMA, px, false);
+        }
         return;
       }
 
-      drawPolyline(marker.corners);
-      drawTagLabel(marker.corners);
-      const markerSize = Math.max(1, Number(markerSizeInput.value) || 80);
-      const pose = drawPose(marker.corners, markerSize);
-      updateHud(pose, fpsEMA);
+      // 背光或運動模糊造成單幀遺失時，不立刻讓框與 XYZ 閃爍消失。
+      if (holdToggle.checked && lastGood && ts - lastGood.time <= HOLD_MS) {
+        renderMarker(lastGood.marker, lastGood.pose, lastGood.px, true);
+      } else {
+        lastGood = null;
+        smoothT = null;
+        updateHud(null, fpsEMA, 0, false);
+      }
     }
 
     startBtn.addEventListener('click', async () => {
@@ -293,16 +459,25 @@
         await openCamera();
       } catch (err) {
         console.error(err);
-        // 若裝置只有一顆可用鏡頭，切換失敗時切回原狀
         facingMode = facingMode === 'environment' ? 'user' : 'environment';
         setStatus('鏡頭切換失敗');
       }
     });
 
+    exposure.addEventListener('input', () => {
+      exposureValue.textContent = `${Number(exposure.value).toFixed(1)} EV`;
+    });
+    exposure.addEventListener('change', () => applyExposure(exposure.value));
+    autoExposureBtn.addEventListener('click', async () => {
+      const zero = Math.max(Number(exposure.min), Math.min(Number(exposure.max), 0));
+      exposure.value = zero;
+      await applyExposure(zero);
+    });
+
     window.addEventListener('pagehide', stopCamera);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && stream) setStatus('頁面在背景');
-      else if (!document.hidden && stream) setStatus(facingMode === 'environment' ? '後鏡頭辨識中' : '前鏡頭辨識中');
+      else if (!document.hidden && stream) setStatus(`${facingMode === 'environment' ? '後鏡頭' : '前鏡頭'} ${canvas.width}×${canvas.height}`);
     });
 
     try { initDetector(); setStatus('函式庫已載入'); }
