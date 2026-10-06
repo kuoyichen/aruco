@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+  <meta name="theme-color" content="#07110c" />
+  <title>ArUco ID 0 即時辨識 + XYZ</title>
+  <style>
+    :root { color-scheme: dark; --panel: rgba(4,14,9,.84); --line:#1d3929; --accent:#59ff8a; }
+    * { box-sizing: border-box; }
+    html,body { margin:0; min-height:100%; background:#030806; color:#eef7f1; font-family: system-ui,-apple-system,"Noto Sans TC",sans-serif; }
+    body { min-height:100dvh; display:flex; flex-direction:column; }
+    header { padding:12px 14px; display:flex; gap:10px; justify-content:space-between; align-items:center; background:#07110c; border-bottom:1px solid var(--line); }
+    header strong { font-size:15px; letter-spacing:.02em; }
+    #status { font-size:12px; color:#b8c9bd; white-space:nowrap; }
+    main { flex:1; min-height:0; position:relative; display:grid; place-items:center; background:#000; overflow:hidden; }
+    video { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+    canvas { display:block; max-width:100%; max-height:100%; width:auto; height:auto; background:#000; }
+    .hud { position:absolute; left:12px; top:12px; min-width:190px; max-width:calc(100% - 24px); padding:10px 12px; border:1px solid rgba(89,255,138,.3); border-radius:12px; background:rgba(0,10,5,.66); backdrop-filter:blur(8px); font:600 12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; pointer-events:none; }
+    .hud .ok { color:#59ff8a; } .hud .muted { color:#9aafa1; }
+    footer { padding:10px 12px calc(10px + env(safe-area-inset-bottom)); display:grid; gap:8px; background:var(--panel); border-top:1px solid var(--line); }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    button,input,select { min-height:42px; border-radius:10px; border:1px solid #31513d; background:#102018; color:#eff8f1; font-size:14px; }
+    button { padding:0 14px; font-weight:700; cursor:pointer; }
+    button.primary { background:#163b24; border-color:#49bd6c; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    label { display:flex; align-items:center; gap:6px; color:#bfd0c3; font-size:12px; }
+    input { width:88px; padding:0 9px; }
+    .note { font-size:11px; color:#8fa296; line-height:1.45; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>ArUco ID 0 · 即時 XYZ</strong>
+    <span id="status">等待啟動</span>
+  </header>
+
+  <main id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="hud" id="hud">
+      <div class="muted">尚未偵測到 ArUco ID 0</div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="row">
+      <button class="primary" id="startBtn">啟動相機</button>
+      <button id="switchBtn" disabled>切換前 / 後鏡頭</button>
+      <label>Marker 邊長(mm)
+        <input id="markerSize" type="number" min="5" max="1000" step="1" value="80" />
+      </label>
+    </div>
+    <div class="note">X=紅、Y=綠、Z=藍。XYZ 數值是相對相機的平移估算；未做相機內參校正時屬近似值。手機瀏覽器需 HTTPS（或 localhost）才能開啟相機。</div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/dictionaries/aruco_4x4_1000.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/svd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/posit1.js"></script>
+
+  <script>
+  (() => {
+    'use strict';
+    const TARGET_ID = 0;
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const hud = document.getElementById('hud');
+    const status = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const switchBtn = document.getElementById('switchBtn');
+    const markerSizeInput = document.getElementById('markerSize');
+
+    let stream = null;
+    let facingMode = 'environment';
+    let detector = null;
+    let running = false;
+    let lastFrameTs = 0;
+    let fpsEMA = 0;
+    let currentTrackSettings = {};
+    let loopGeneration = 0;
+
+    function setStatus(text) { status.textContent = text; }
+
+    function pickDictionaryName() {
+      const keys = Object.keys((window.AR && AR.DICTIONARIES) || {});
+      return keys.find(k => /4X4.*1000/i.test(k)) ||
+             keys.find(k => /4X4/i.test(k)) ||
+             'ARUCO_4X4_1000';
+    }
+
+    function initDetector() {
+      if (!window.AR || !AR.Detector) throw new Error('ArUco 函式庫載入失敗');
+      const dictionaryName = pickDictionaryName();
+      detector = new AR.Detector({ dictionaryName, maxHammingDistance: 1 });
+      console.log('ArUco dictionary:', dictionaryName, Object.keys(AR.DICTIONARIES || {}));
+    }
+
+    async function openCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('此瀏覽器不支援相機 API');
+      stopCamera();
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      };
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      await video.play();
+      const track = stream.getVideoTracks()[0];
+      currentTrackSettings = track.getSettings ? track.getSettings() : {};
+      resizeCanvasToVideo();
+      running = true;
+      const generation = ++loopGeneration;
+      switchBtn.disabled = false;
+      startBtn.textContent = '重新啟動相機';
+      setStatus(facingMode === 'environment' ? '後鏡頭辨識中' : '前鏡頭辨識中');
+      requestAnimationFrame(ts => loop(ts, generation));
+    }
+
+    function stopCamera() {
+      running = false;
+      loopGeneration++;
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      video.srcObject = null;
+    }
+
+    function resizeCanvasToVideo() {
+      const vw = video.videoWidth || 1280;
+      const vh = video.videoHeight || 720;
+      // 限制處理解析度，兼顧手機效能
+      const maxW = 960;
+      const scale = Math.min(1, maxW / vw);
+      canvas.width = Math.round(vw * scale);
+      canvas.height = Math.round(vh * scale);
+    }
+
+    function drawPolyline(corners) {
+      ctx.save();
+      ctx.strokeStyle = '#39ff75';
+      ctx.lineWidth = Math.max(3, canvas.width / 320);
+      ctx.shadowColor = '#00ff55';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i=1; i<corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function centerCorners(corners) {
+      return corners.map(c => ({ x: c.x - canvas.width/2, y: canvas.height/2 - c.y }));
+    }
+
+    function projectPoint(p, R, T, f) {
+      const X = T[0] + R[0][0]*p[0] + R[0][1]*p[1] + R[0][2]*p[2];
+      const Y = T[1] + R[1][0]*p[0] + R[1][1]*p[1] + R[1][2]*p[2];
+      const Z = T[2] + R[2][0]*p[0] + R[2][1]*p[1] + R[2][2]*p[2];
+      if (!Number.isFinite(Z) || Math.abs(Z) < 1e-6) return null;
+      return { x: canvas.width/2 + f * X/Z, y: canvas.height/2 - f * Y/Z };
+    }
+
+    function drawAxisLine(origin, point, color, label) {
+      if (!origin || !point) return;
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineWidth = Math.max(3, canvas.width / 360);
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.moveTo(origin.x, origin.y); ctx.lineTo(point.x, point.y); ctx.stroke();
+      const a = Math.atan2(point.y-origin.y, point.x-origin.x);
+      const ah = 9;
+      ctx.beginPath();
+      ctx.moveTo(point.x, point.y);
+      ctx.lineTo(point.x-ah*Math.cos(a-0.55), point.y-ah*Math.sin(a-0.55));
+      ctx.lineTo(point.x-ah*Math.cos(a+0.55), point.y-ah*Math.sin(a+0.55));
+      ctx.closePath(); ctx.fill();
+      ctx.font = `700 ${Math.max(14, canvas.width/55)}px system-ui`;
+      ctx.fillText(label, point.x + 7, point.y - 7);
+      ctx.restore();
+    }
+
+    function drawPose(corners, markerSize) {
+      if (!window.POS?.Posit) return null;
+      const posit = new POS.Posit(markerSize, canvas.width);
+      const pose = posit.pose(centerCorners(corners));
+      if (!pose || !pose.bestRotation || !pose.bestTranslation) return null;
+      const R = pose.bestRotation;
+      const T = pose.bestTranslation;
+      const f = canvas.width;
+      const L = markerSize * 0.65;
+      const O = projectPoint([0,0,0], R,T,f);
+      const X = projectPoint([L,0,0], R,T,f);
+      const Y = projectPoint([0,L,0], R,T,f);
+      // 使用 -Z 讓藍色 Z 軸朝標記正面方向呈現
+      const Z = projectPoint([0,0,-L], R,T,f);
+      drawAxisLine(O, X, '#ff4d4d', 'X');
+      drawAxisLine(O, Y, '#44ff77', 'Y');
+      drawAxisLine(O, Z, '#4da3ff', 'Z');
+      return { translation:T, error:pose.bestError };
+    }
+
+    function drawTagLabel(corners) {
+      const x = Math.min(...corners.map(c=>c.x));
+      const y = Math.min(...corners.map(c=>c.y));
+      ctx.save();
+      ctx.font = `700 ${Math.max(14, canvas.width/60)}px system-ui`;
+      const text = 'ArUco ID 0';
+      const w = ctx.measureText(text).width + 16;
+      const h = Math.max(24, canvas.width/34);
+      ctx.fillStyle = 'rgba(0,0,0,.72)';
+      ctx.fillRect(x, Math.max(0,y-h), w, h);
+      ctx.fillStyle = '#55ff84';
+      ctx.fillText(text, x+8, Math.max(18,y-7));
+      ctx.restore();
+    }
+
+    function updateHud(pose, fps) {
+      if (!pose) {
+        hud.innerHTML = `<div class="muted">尚未偵測到 ArUco ID ${TARGET_ID}</div><div class="muted">FPS ${fps.toFixed(1)}</div>`;
+        return;
+      }
+      const [x,y,z] = pose.translation;
+      const dist = Math.hypot(x,y,z);
+      hud.innerHTML = `
+        <div class="ok">● ArUco ID ${TARGET_ID} 已鎖定</div>
+        <div>X <span style="color:#ff7777">${x.toFixed(1)} mm</span></div>
+        <div>Y <span style="color:#71ff96">${y.toFixed(1)} mm</span></div>
+        <div>Z <span style="color:#73b7ff">${z.toFixed(1)} mm</span></div>
+        <div>距離 ${dist.toFixed(1)} mm</div>
+        <div class="muted">Pose error ${Number(pose.error||0).toFixed(2)} · FPS ${fps.toFixed(1)}</div>`;
+    }
+
+    function loop(ts, generation) {
+      if (!running || !stream || generation !== loopGeneration) return;
+      requestAnimationFrame(nextTs => loop(nextTs, generation));
+      if (video.readyState < 2) return;
+      if (video.videoWidth && (canvas.width === 0 || canvas.height === 0)) resizeCanvasToVideo();
+      // 約 30fps 上限，降低手機發熱
+      if (ts - lastFrameTs < 30) return;
+      const dt = ts - lastFrameTs;
+      lastFrameTs = ts;
+      const fpsNow = dt > 0 ? 1000/dt : 0;
+      fpsEMA = fpsEMA ? fpsEMA*0.88 + fpsNow*0.12 : fpsNow;
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      let markers = [];
+      try {
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        markers = detector.detect(imageData) || [];
+      } catch (err) {
+        console.error(err);
+        setStatus('辨識錯誤');
+        return;
+      }
+
+      const marker = markers.find(m => Number(m.id) === TARGET_ID);
+      if (!marker) {
+        updateHud(null, fpsEMA);
+        return;
+      }
+
+      drawPolyline(marker.corners);
+      drawTagLabel(marker.corners);
+      const markerSize = Math.max(1, Number(markerSizeInput.value) || 80);
+      const pose = drawPose(marker.corners, markerSize);
+      updateHud(pose, fpsEMA);
+    }
+
+    startBtn.addEventListener('click', async () => {
+      try {
+        if (!detector) initDetector();
+        setStatus('要求相機權限…');
+        await openCamera();
+      } catch (err) {
+        console.error(err);
+        setStatus('無法啟動相機');
+        hud.innerHTML = `<div style="color:#ff8b8b">${String(err.message || err)}</div><div class="muted">請確認使用 HTTPS、已允許相機權限，且瀏覽器支援 getUserMedia。</div>`;
+      }
+    });
+
+    switchBtn.addEventListener('click', async () => {
+      try {
+        facingMode = facingMode === 'environment' ? 'user' : 'environment';
+        setStatus('切換鏡頭…');
+        await openCamera();
+      } catch (err) {
+        console.error(err);
+        // 若裝置只有一顆可用鏡頭，切換失敗時切回原狀
+        facingMode = facingMode === 'environment' ? 'user' : 'environment';
+        setStatus('鏡頭切換失敗');
+      }
+    });
+
+    window.addEventListener('pagehide', stopCamera);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && stream) setStatus('頁面在背景');
+      else if (!document.hidden && stream) setStatus(facingMode === 'environment' ? '後鏡頭辨識中' : '前鏡頭辨識中');
+    });
+
+    try { initDetector(); setStatus('函式庫已載入'); }
+    catch (e) { setStatus('函式庫載入中 / 失敗'); console.error(e); }
+  })();
+  </script>
+</body>
+</html>
